@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Trading Bot 监控台</title>
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f8" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0d0f12" />
+    <script>
+      // 首屏前应用主题，避免闪烁：优先已保存选择，首次访问跟随系统
+      try {
+        var saved = localStorage.getItem("dashboard-theme");
+        var dark =
+          saved === "dark"
+            ? true
+            : saved === "light"
+              ? false
+              : !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      } catch (e) {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

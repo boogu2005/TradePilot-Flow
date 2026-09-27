@@ -1,0 +1,51 @@
+# Local credentials and private configuration
+.env
+.env.*
+!.env.example
+config.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Trading, session, account and runtime data
+user_data/
+data/
+logs/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.session
+*.session-*
+*.log
+*.err
+
+# Python and test artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv*/
+venv/
+dist/
+build/
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Editor, assistant and OS-specific files
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Container data
+pgdata/

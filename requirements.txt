@@ -1,0 +1,22 @@
+# ———— 交易所连接 ————
+ccxt>=4.4.0
+
+# ———— Telegram 监听 ————
+telethon>=1.36.0
+python-socks>=2.4.0  # Telethon 代理必需（HTTP/SOCKS5）
+
+# ———— DeepSeek API ————
+openai>=1.50.0
+
+# ———— 数据库 ————
+sqlalchemy>=2.0.0
+
+# ———— 工具 ————
+python-dotenv>=1.0.0
+loguru>=0.7.0
+
+# ———— Report Service（独立进程，可选）————
+# 仅 report_service/ 模块需要，不影响交易引擎
+apscheduler>=3.10.0
+httpx>=0.27.0
+anthropic>=0.40.0  # 可选：失败时自动降级到 openai SDK

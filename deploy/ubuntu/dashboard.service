@@ -1,0 +1,31 @@
+# Trading Bot Dashboard - systemd 服务模板
+#
+# 用法：一键部署脚本 deploy/ubuntu/deploy.sh 会自动生成此文件，
+#       此处模板仅供手动部署/排障参考。
+#
+# 需要替换的占位符：
+#   <ROOT>             机器人项目根目录（含 backend/ user_data/）
+#   <USER>             systemd 运行用户（建议非 root 用户）
+#   <VENV>             虚拟环境目录名（默认 .venv-dashboard）
+#   <PORT>             Dashboard 监听端口（默认 8000）
+[Unit]
+Description=Trading Bot Dashboard (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=<ROOT>
+User=<USER>
+Environment=PYTHONUNBUFFERED=1
+Environment=PORT=<PORT>
+# 机器人数据库（只读连接，无需修改）
+Environment=DATABASE_URL=sqlite:////<ROOT>/user_data/trading_bot.db
+# 如机器人 .env 已含 OKX 凭证，Dashboard 会自动启用实时行情；
+# 若要纯读库，可加： Environment=DASHBOARD_LIVE_OKX=0
+ExecStart=<ROOT>/<VENV>/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port <PORT>
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

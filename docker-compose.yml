@@ -1,0 +1,27 @@
+# PostgreSQL 数据库（生产环境使用）
+# 启动: docker compose up -d postgres
+# 停止: docker compose down
+
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: trading_bot_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: trading_bot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your private environment}
+      POSTGRES_DB: trading_bot
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading_bot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

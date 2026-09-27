@@ -1,0 +1,22 @@
+{
+  "risk": {
+    "default_stoploss_pct": 0.02,
+    "max_position_pct": 5.0,
+    "tp1": {
+      "enabled": true,
+      "profit_pct": 0.03,
+      "close_pct": 30,
+      "move_sl_to_breakeven": true
+    },
+    "tp2": {
+      "enabled": true,
+      "profit_pct": 0.06,
+      "close_pct": 50
+    },
+    "trailing": {
+      "enabled": true,
+      "activate_profit_pct": 0.06,
+      "lock_gap_pct": 0.06
+    }
+  }
+}
