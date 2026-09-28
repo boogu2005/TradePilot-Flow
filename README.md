@@ -8,6 +8,7 @@
 - 为已成交仓位挂止损和止盈，并根据交易所状态补挂缺失的保护单。
 - 老师提供止盈止损价时使用该价位；未收到止损价时使用本地固定止损。单个老师止盈目标对应全仓。
 - Dashboard 展示账户、持仓、历史交易及信号来源统计；可使用演示数据查看界面。
+- 可选异常诊断 Agent 在常规恢复耗尽后查询证据、生成处置计划并进入版本绑定的人工审核；默认关闭且没有直接交易权限。
 
 ## 代码结构
 
@@ -18,6 +19,7 @@
 | `database/`、`user_data/` | 数据模型与本地运行数据；`user_data/` 不进入仓库 |
 | `backend/`、`frontend/` | 监控 API 与网页 |
 | `simulation/`、`tests/` | 离线模拟与回归测试 |
+| `diagnostics/` | 持久化异常、只读 Agent 工具循环、人工审核和受控执行器 |
 
 ## 本地开始
 
@@ -54,7 +56,7 @@ npm run dev
 ## 验证
 
 ```powershell
-.\.venv\Scripts\python.exe -m compileall -q backend core database exchange_engine exit signal_engine telegram_engine
+.\.venv\Scripts\python.exe -m compileall -q backend core database diagnostics exchange_engine exit signal_engine telegram_engine
 .\.venv\Scripts\python.exe -X utf8 tests/sim_entry_fill.py
 .\.venv\Scripts\python.exe -X utf8 tests/sim_tp2_flow.py
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p test_dashboard_auth_config.py
@@ -65,6 +67,14 @@ npm run build
 ```
 
 部分旧版协调器模拟的预期仍需整理，当前不把全部模拟测试通过作为项目声明。模拟测试、测试网与真实交易所环境之间存在差异。
+
+异常诊断闭环的架构、开关、恢复、审核、演示和评估命令见 [docs/DIAGNOSTIC_AGENT.md](docs/DIAGNOSTIC_AGENT.md)。快速运行：
+
+```powershell
+python -m diagnostics.demo
+python -m diagnostics.evaluation
+python -m pytest -q tests -k diagnostic
+```
 
 ## 安全与隐私
 

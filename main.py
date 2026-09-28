@@ -1434,6 +1434,19 @@ async def start_services(
         lambda: run_repair_worker(shutdown_event),
     )
 
+    # Optional anomaly investigator. It only consumes persisted incidents and
+    # read-only tools; the trading workflow never waits for this task.
+    from diagnostics.bootstrap import build_service as build_diagnostic_service
+    diagnostic_service = build_diagnostic_service(parser)
+    if diagnostic_service is not None:
+        await tasks.create(
+            "异常诊断Agent",
+            lambda: diagnostic_service.run(shutdown_event),
+        )
+        logger.info("[Diagnostics] persistent investigation worker enabled")
+    else:
+        logger.info("[Diagnostics] disabled; deterministic workflow remains active")
+
     # 看门狗
     await tasks.create(
         "看门狗",
