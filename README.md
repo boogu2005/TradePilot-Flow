@@ -73,8 +73,11 @@ npm run build
 ```powershell
 python -m diagnostics.demo
 python -m diagnostics.evaluation
+python -m diagnostics.fault_evaluation
 python -m pytest -q tests -k diagnostic
 ```
+
+工程审查、已修复问题、实测验证和剩余限制见 [docs/ENGINEERING_REVIEW.md](docs/ENGINEERING_REVIEW.md)。`evaluation` 是脚本契约样例，不提供真实模型效果或 Workflow 提升指标；`fault_evaluation` 实际执行故障回归并从 JUnit 结果生成报告。演示采用模拟批准和内存状态，SQLite 恢复由独立测试验证。
 
 ## 安全与隐私
 

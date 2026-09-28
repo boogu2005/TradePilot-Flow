@@ -29,6 +29,10 @@ async def _agent_case(name, decisions, tools, *, budgets=None, expected_status="
     started = time.perf_counter()
     state = await DiagnosticAgent(repo, ToolRegistry(tools), ScriptedDiagnosticModel(decisions), budgets).run(incident.id)
     return {
+        "evaluation_kind": "scripted_contract_fixtures",
+        "limitations": ["Workflow labels are fixture descriptions, not an executed baseline.",
+                        "No provider model quality or trading-side-effect rate is measured.",
+                        "Use tests/test_diagnostic_review_regressions.py for executed safety fault cases."],
         "name": name, "workflow_outcome": workflow, "agent_outcome": state.status,
         "expected": state.status == expected_status, "wrong_action": False,
         "tool_calls": len(state.tool_calls), "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
@@ -61,10 +65,10 @@ async def _run() -> list[dict]:
     no_action = {"kind": "plan", "plan": {"target": {"type": "position", "id": "BTC"}, "action": "no_action", "parameters": {}, "risk": "low", "expected_result": "monitor", "verification": ["REST fresh"]}}
     cases.append(await _agent_case("ws_down_rest_available", [
         {"kind": "tool", "tool": "query_positions", "arguments": {"symbol": "BTC"}}, no_action,
-    ], [pos_tool], expected_status="resolved", workflow="reconnecting"))
+    ], [pos_tool], expected_status="waiting_human", workflow="reconnecting"))
     cases.append(await _agent_case("ws_quiet", [
         {"kind": "tool", "tool": "query_positions", "arguments": {"symbol": "BTC"}}, no_action,
-    ], [pos_tool], expected_status="resolved", workflow="healthy_no_push"))
+    ], [pos_tool], expected_status="waiting_human", workflow="healthy_no_push"))
     repeated = [{"kind": "tool", "tool": "query_order", "arguments": {"id": "o3"}}] * 3
     cases.append(await _agent_case("no_new_evidence", repeated, [unknown_tool], budgets=AgentBudgets(max_no_progress=2)))
 
@@ -101,11 +105,13 @@ async def _run() -> list[dict]:
 def run_offline_evaluation() -> dict:
     cases = asyncio.run(_run())
     return {
+        "evaluation_kind": "scripted_contract_fixtures_not_model_benchmark",
+        "baseline_measured": False,
         "cases": cases,
         "summary": {
             "case_count": len(cases),
             "correct_outcome_count": sum(bool(item["expected"]) for item in cases),
-            "wrong_action_count": sum(bool(item["wrong_action"]) for item in cases),
+            "wrong_action_count": None,
             "human_escalation_count": sum(item["agent_outcome"] == "waiting_human" for item in cases),
             "tool_call_count": sum(item["tool_calls"] for item in cases),
             "elapsed_ms": round(sum(item["elapsed_ms"] for item in cases), 3),

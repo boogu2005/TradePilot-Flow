@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any
 
 from loguru import logger
 
@@ -18,9 +17,13 @@ class IncidentService:
         self._queued: set[str] = set()
 
     def report_nowait(self, value: IncidentInput):
-        if not self.enabled:
+        try:
+            incident = self.repository.report(value)
+        except Exception:  # noqa: BLE001 - diagnostic storage cannot break trading
+            logger.error("[Diagnostics] persistence unavailable; incident not persisted")
             return None
-        incident = self.repository.report(value)
+        if not self.enabled or incident.status not in ("open", "investigating"):
+            return incident
         if incident.id not in self._queued:
             try:
                 self.queue.put_nowait(incident.id)
@@ -30,6 +33,8 @@ class IncidentService:
         return incident
 
     def enqueue_resumable(self) -> int:
+        if not self.enabled:
+            return 0
         count = 0
         for incident_id in self.repository.resumable_ids():
             if incident_id not in self._queued and not self.queue.full():
@@ -44,15 +49,19 @@ class IncidentService:
             try:
                 incident_id = await asyncio.wait_for(self.queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
+                self.enqueue_resumable()
                 continue
             try:
                 if self.agent:
                     self.repository.set_status(incident_id, "investigating")
                     state = await self.agent.run(incident_id)
                     self.repository.set_status(incident_id, state.status)
-            except Exception as exc:
-                logger.error(f"[Diagnostics] incident={incident_id} failed: {type(exc).__name__}: {exc}")
-                self.repository.set_status(incident_id, "failed")
+            except Exception as exc:  # noqa: BLE001 - isolate one diagnostic task
+                logger.error(f"[Diagnostics] incident={incident_id} failed: {type(exc).__name__}")
+                try:
+                    self.repository.set_status(incident_id, "failed")
+                except Exception:  # noqa: BLE001 - report unavailable failure storage
+                    logger.error("[Diagnostics] could not persist failure status")
             finally:
                 self._queued.discard(incident_id)
                 self.queue.task_done()

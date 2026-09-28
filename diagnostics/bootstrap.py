@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from database.db import get_session
+
 from .adapters import build_read_only_tools
 from .agent import AgentBudgets, DiagnosticAgent
 from .model import OpenAICompatibleDiagnosticModel
@@ -14,7 +15,7 @@ from .service import IncidentService, configure_service
 def build_service(parser) -> IncidentService | None:
     enabled = os.getenv("DIAGNOSTIC_AGENT_ENABLED", "0").lower() in ("1", "true", "yes", "on")
     if not enabled:
-        configure_service(None)
+        configure_service(IncidentService(DiagnosticRepository(get_session), enabled=False))
         return None
     repository = DiagnosticRepository(get_session)
     root = Path(__file__).resolve().parents[1]

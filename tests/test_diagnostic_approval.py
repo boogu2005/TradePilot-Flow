@@ -97,3 +97,19 @@ def test_review_supports_modify_reject_and_request_information():
     assert modified.modified_parameters == {"state": "partially_filled"}
     assert rejected.decision == "reject"
     assert requested.decision == "request_information"
+
+
+def test_modify_creates_unapproved_plan_version():
+    from dataclasses import asdict
+    from diagnostics.domain import IncidentInput, utcnow
+    repo = InMemoryDiagnosticRepository()
+    item = repo.report(IncidentInput("modify", "unknown", "order", "abc", utcnow()))
+    original = plan()
+    repo.save_checkpoint(item.id, {"plan": asdict(original), "status": "waiting_human"})
+    approvals = ApprovalService(repo)
+    approvals.decide(item.id, original, "approve", "alice")
+    approvals.decide(item.id, original, "modify", "alice", modified_parameters={"state": "partial"})
+    revised = repo.load_checkpoint(item.id)["plan"]
+    assert revised["version"] == 2
+    assert revised["parameters"] == {"state": "partial"}
+    assert approvals.get_valid(item.id, original, original.target.fingerprint) is None

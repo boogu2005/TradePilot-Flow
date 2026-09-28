@@ -52,7 +52,7 @@ def test_checkpoint_round_trip_is_separate_from_business_state(tmp_path):
     repo.save_checkpoint(incident.id, {"step": 2, "status": "investigating", "evidence": []})
 
     assert repo.load_checkpoint(incident.id)["step"] == 2
-    assert repo.get_incident(incident.id).status == "open"
+    assert repo.get_incident(incident.id).status == "investigating"
 
 
 def test_full_agent_checkpoint_is_json_serializable(tmp_path):

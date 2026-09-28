@@ -1,5 +1,7 @@
 # 异常诊断系统离线评估记录
 
+> 工程审查更正：下方为上一轮历史输出，不能作为模型效果或业务安全指标。旧实现把 wrong_action 固定为 False，Workflow 对照也只是场景标签。当前评估返回 wrong_action_count=null，明确标识为 scripted contract fixtures。真实副作用重放、审批撤销、SQLite 恢复、并发回调及超时用例见 tests/test_diagnostic_review_regressions.py。不得引用下表宣传“零错误动作”或生产正确率。
+
 评估日期：2026-09-28
 
 执行命令：

@@ -4,15 +4,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from database.models import Order, Trade
+
 from .domain import ToolResult
 from .runbooks import KeywordRunbook
 from .tools import DiagnosticTool, ToolRegistry
 
 
 def _exchange_error(source: str, exc: Exception) -> ToolResult:
+    from ccxt import OrderNotFound
     message = str(exc)[:500]
-    lowered = message.lower()
-    if "does not exist" in lowered or "not found" in lowered or "51400" in lowered:
+    if isinstance(exc, OrderNotFound):
         return ToolResult.not_found(source, {"message": message})
     return ToolResult.error(source, type(exc).__name__, message, retryable=True)
 
@@ -20,29 +21,33 @@ def _exchange_error(source: str, exc: Exception) -> ToolResult:
 def build_read_only_tools(session_factory, log_path: Path, runbook_paths: list[Path]) -> ToolRegistry:
     async def query_order(args):
         try:
-            from exchange_engine.exchange import get_exchange, _to_ccxt_symbol
+            from exchange_engine.exchange import _to_ccxt_symbol, get_exchange
             ex = get_exchange(args["exchange"])
             order = await ex.fetch_order(args["order_id"], _to_ccxt_symbol(args["symbol"], args["exchange"]))
-            return ToolResult.ok("exchange_rest", {"order": order}) if order else ToolResult.not_found("exchange_rest")
-        except Exception as exc:
+            return ToolResult.ok("exchange_rest", {"order": order}) if order else ToolResult.unknown("exchange_rest")
+        except Exception as exc:  # noqa: BLE001 - exchange failures are structured evidence
             return _exchange_error("exchange_rest", exc)
 
     async def query_fills(args):
         try:
-            from exchange_engine.exchange import get_exchange, _to_ccxt_symbol
+            from exchange_engine.exchange import _to_ccxt_symbol, get_exchange
             ex = get_exchange(args["exchange"])
             rows = await ex.fetch_my_trades(_to_ccxt_symbol(args["symbol"], args["exchange"]), limit=min(args["limit"], 100))
             selected = [row for row in rows if not args["order_id"] or str(row.get("order")) == args["order_id"]]
             return ToolResult.ok("exchange_rest", {"fills": selected[:args["limit"]]})
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - exchange failures are structured evidence
             return _exchange_error("exchange_rest", exc)
 
     async def query_positions(args):
         try:
-            from exchange_engine.exchange import fetch_positions
-            rows = await fetch_positions(args["symbol"] or None, exchange=args["exchange"])
+            from exchange_engine.exchange import _to_ccxt_symbol, get_exchange
+            ex = get_exchange(args["exchange"])
+            symbols = [_to_ccxt_symbol(args["symbol"], args["exchange"])] if args["symbol"] else None
+            rows = await ex.fetch_positions(symbols=symbols, params={"instType": "SWAP"})
+            if not isinstance(rows, list):
+                return ToolResult.unknown("exchange_rest")
             return ToolResult.ok("exchange_rest", {"positions": rows[:50], "snapshot_time": datetime.now(timezone.utc).isoformat()})
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - exchange failures are structured evidence
             return _exchange_error("exchange_rest", exc)
 
     async def query_local(args):
@@ -59,7 +64,11 @@ def build_read_only_tools(session_factory, log_path: Path, runbook_paths: list[P
     async def query_logs(args):
         if not log_path.exists():
             return ToolResult.not_found("local_log", {"path": str(log_path)})
-        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-5000:]
+        with log_path.open("rb") as stream:
+            stream.seek(0, 2)
+            size = stream.tell()
+            stream.seek(max(0, size - 262144))
+            lines = stream.read(262144).decode("utf-8", errors="replace").splitlines()[-5000:]
         matches = [line for line in lines if args["query"].lower() in line.lower()][-min(args["limit"], 200):]
         return ToolResult.ok("local_log", {"path": str(log_path), "lines": matches}) if matches else ToolResult.not_found("local_log", {"path": str(log_path)})
 

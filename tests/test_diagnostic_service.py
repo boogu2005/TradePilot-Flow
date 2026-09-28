@@ -12,7 +12,7 @@ def test_disabled_service_does_not_enqueue_or_block_workflow():
         correlation_key="trade:1", event_type="repair_failed", object_type="trade",
         object_id="1", occurred_at=datetime.now(timezone.utc),
     ))
-    assert result is None
+    assert result is not None
     assert service.queue.qsize() == 0
 
 

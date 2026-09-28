@@ -106,6 +106,14 @@ class TaskManager:
                 logger.error(f"[TaskManager] 任务 {name} 已达最大重试次数 ({max_retries})，停止重启")
                 # 标记对应模块为 FAILED
                 _try_mark_failed(name)
+                from diagnostics.domain import Evidence, IncidentInput, utcnow
+                from diagnostics.service import report_nowait
+                report_nowait(IncidentInput(
+                    correlation_key=f"worker:{name}:recovery_exhausted",
+                    event_type="worker_recovery_exhausted", object_type="worker", object_id=name,
+                    occurred_at=utcnow(), recovery_steps=[f"supervised_restart:{max_retries}"],
+                    evidence=[Evidence("task_manager", "failed", {"worker": name, "attempts": max_retries})],
+                ))
 
     # —————— 取消 / 等待 ——————
 

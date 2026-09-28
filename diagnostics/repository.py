@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import copy
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from database.models import (
     DiagnosticApprovalRecord,
     DiagnosticExecutionRecord,
     DiagnosticIncidentRecord,
 )
+
 from .domain import Approval, Evidence, Incident, IncidentInput
 
 
@@ -77,6 +80,7 @@ class DiagnosticRepository:
             if row is None:
                 raise KeyError(incident_id)
             row.checkpoint = copy.deepcopy(checkpoint)
+            row.status = checkpoint.get("status", row.status)
             session.commit()
 
     def load_checkpoint(self, incident_id: str) -> dict[str, Any] | None:
@@ -95,7 +99,6 @@ class DiagnosticRepository:
         with self._sessions() as session:
             return list(session.scalars(select(DiagnosticIncidentRecord.id).where(
                 DiagnosticIncidentRecord.status.in_(("open", "investigating")),
-                DiagnosticIncidentRecord.checkpoint.is_not(None),
             )).all())
 
     def list_incidents(self, limit: int = 50) -> list[Incident]:
@@ -155,6 +158,19 @@ class DiagnosticRepository:
                     setattr(row, key, item)
             session.commit()
 
+    def claim_execution(self, value: dict[str, Any]) -> bool:
+        """The unique operation primary key arbitrates concurrent executors."""
+        with self._sessions() as session:
+            session.add(DiagnosticExecutionRecord(**value))
+            try:
+                session.commit()
+                return True
+            except IntegrityError:
+                session.rollback()
+                if session.get(DiagnosticExecutionRecord, value["operation_id"]) is None:
+                    raise
+                return False
+
 
 class InMemoryDiagnosticRepository:
     def __init__(self):
@@ -188,15 +204,17 @@ class InMemoryDiagnosticRepository:
 
     def save_checkpoint(self, incident_id: str, checkpoint: dict[str, Any]) -> None:
         self.checkpoints[incident_id] = copy.deepcopy(checkpoint)
+        self.incidents[incident_id].status = checkpoint.get("status", self.incidents[incident_id].status)
 
     def load_checkpoint(self, incident_id: str) -> dict[str, Any] | None:
         return copy.deepcopy(self.checkpoints.get(incident_id))
 
     def set_status(self, incident_id: str, status: str) -> None:
-        self.incidents[incident_id].status = status
+        if incident_id in self.incidents:
+            self.incidents[incident_id].status = status
 
     def resumable_ids(self) -> list[str]:
-        return [incident_id for incident_id in self.checkpoints if self.incidents[incident_id].status in ("open", "investigating")]
+        return [key for key, item in self.incidents.items() if item.status in ("open", "investigating")]
 
     def list_incidents(self, limit: int = 50) -> list[Incident]:
         return [copy.deepcopy(item) for item in list(self.incidents.values())[-limit:]][::-1]
@@ -218,3 +236,9 @@ class InMemoryDiagnosticRepository:
 
     def save_execution(self, value: dict[str, Any]) -> None:
         self.executions[value["operation_id"]] = copy.deepcopy(value)
+
+    def claim_execution(self, value: dict[str, Any]) -> bool:
+        if value["operation_id"] in self.executions:
+            return False
+        self.save_execution(value)
+        return True

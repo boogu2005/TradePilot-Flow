@@ -8,7 +8,6 @@ from .agent import DiagnosticAgent
 from .approval import ApprovalService
 from .domain import Evidence, IncidentInput, ToolResult
 from .execution import ControlledExecutor, ExecutionHandler
-from .model import ScriptedDiagnosticModel
 from .repository import InMemoryDiagnosticRepository
 from .tools import DiagnosticTool, ToolRegistry
 
@@ -35,7 +34,7 @@ async def _run_demo() -> dict:
         DiagnosticTool("query_order", {"order_id": str}, query_exchange),
         DiagnosticTool("query_local", {"order_id": str}, query_local),
     ])
-    model = ScriptedDiagnosticModel([
+    decisions = [
         {"kind": "tool", "tool": "query_order", "arguments": {"order_id": "demo-order-001"}},
         {"kind": "tool", "tool": "query_local", "arguments": {"order_id": "demo-order-001"}},
         {"kind": "plan", "candidate_causes": [{"cause": "exchange_response_lost", "because": "exchange filled while local stayed pending"}],
@@ -44,8 +43,27 @@ async def _run_demo() -> dict:
                   "evidence_ids": ["exchange-query", "local-query"],
                   "preconditions": ["exchange order remains closed and filled"], "risk": "medium",
                   "expected_result": "local order matches exchange", "verification": ["local state is closed", "local filled is 1.0"]}},
-    ])
+    ]
+
+    class EvidenceDrivenDemoModel:
+        """Offline policy double: every transition depends on returned evidence."""
+        async def decide(self, current, _tools):
+            if not current.tool_calls:
+                return decisions[0]
+            observation = current.tool_calls[-1].result
+            if observation.status != "ok":
+                return {"kind": "escalate", "reason": "query failed; order outcome unknown"}
+            if current.tool_calls[-1].tool == "query_order":
+                if observation.data.get("state") != "closed":
+                    return {"kind": "escalate", "reason": "exchange order is not confirmed filled"}
+                return decisions[1]
+            if observation.data.get("state") != "pending":
+                return {"kind": "escalate", "reason": "local state changed; new review required"}
+            return decisions[2]
+
+    model = EvidenceDrivenDemoModel()
     state = await DiagnosticAgent(repository, tools, model).run(incident.id)
+    assert state.plan is not None
 
     approvals = ApprovalService(repository)
     approval = approvals.decide(
@@ -69,7 +87,8 @@ async def _run_demo() -> dict:
     execution = await ControlledExecutor(repository, approvals, [handler]).execute(incident.id, state.plan)
     return {
         "stages": ["incident_persisted", "evidence_queried", "plan_ready", "human_approved", "controlled_execution", "business_verified"],
-        "incident": {"id": incident.id, "correlation_key": incident.correlation_key},
+        "incident": {"id": incident.id, "correlation_key": incident.correlation_key,
+                     "status": repository.get_incident(incident.id).status},
         "agent": {"status": state.status, "termination": state.termination_reason, "plan": state.plan.action},
         "approval": {"id": approval.id, "reviewer": approval.reviewer, "plan_version": approval.plan_version},
         "execution": {"operation_id": execution.operation_id, "status": execution.status, "verification": execution.verification},

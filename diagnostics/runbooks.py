@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 from .domain import ToolResult
 
@@ -13,7 +14,7 @@ class KeywordRunbook:
 
     def search(self, query: str, limit: int = 5) -> ToolResult:
         terms = {term.lower() for term in re.findall(r"[A-Za-z0-9_\-]{2,}|[\u4e00-\u9fff]{2,}", query)}
-        matches = []
+        matches: list[dict[str, Any]] = []
         for path in self.paths:
             try:
                 text = path.read_text(encoding="utf-8")

@@ -11,5 +11,5 @@ def test_required_fault_scenarios_have_process_and_outcome_assertions():
         "model_unavailable",
     }
     assert report["summary"]["case_count"] == 10
-    assert report["summary"]["wrong_action_count"] == 0
+    assert report["summary"]["wrong_action_count"] is None
     assert all("tool_calls" in item and "elapsed_ms" in item and "token_usage" in item for item in report["cases"])
