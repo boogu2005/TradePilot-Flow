@@ -1,0 +1,149 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* ============ 主题色板 ============
+   :root 白天（Apple 简约亮色），[data-theme="dark"] 黑夜护眼（Apple 深夜深灰，
+   低亮度暖灰 + 低饱和语义色，减少蓝光与炫光）。 */
+
+/* ---- 亮色：OKX 白纸黑字极简（黑白灰，无品牌色） ---- */
+:root {
+  color-scheme: light;
+  --color-panel: #f7f7f8; /* 页面背景（近白浅灰） */
+  --color-panel2: #ffffff; /* 卡片/侧栏 */
+  --color-hover: #efeff2; /* 悬停态 */
+  --color-border: #e7e7ea; /* 发丝线 */
+  --color-text-1: #17171a; /* 主文字（近黑） */
+  --color-text-2: #6e6e73; /* 次要文字 */
+  --color-text-3: #aeaeb2; /* 弱化文字 */
+  --color-accent: #000000; /* 主操作/激活/链接 = 纯黑 */
+  --color-accent-contrast: #ffffff; /* accent 上的文字 */
+  --color-accent-card-from: #f3f4f6; /* 强调卡（中性浅灰） */
+  --color-accent-card-to: #fafafa;
+  --color-up: #0a9c5e; /* 涨（保持绿涨红跌方向） */
+  --color-down: #e5484d; /* 跌 */
+  --color-warn: #b25e00; /* 警示（琥珀，浅底可读） */
+  --scrollbar-track: #f7f7f8;
+  --scrollbar-thumb: #d4d4d9;
+  --scrollbar-thumb-hover: #aeaeb2;
+  --table-header-bg: #f7f7f8;
+  --table-header-color: #6e6e73;
+  --table-border: #e7e7ea;
+}
+
+/* ---- 暗色：OKX 深度暗色（黑纸白字镜像） ---- */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --color-panel: #0d0f12; /* 页面背景（近黑） */
+  --color-panel2: #16181c; /* 卡片/侧栏 */
+  --color-hover: #202328; /* 悬停态 */
+  --color-border: #2a2d33; /* 发丝线 */
+  --color-text-1: #e8eaed; /* 主文字（近白） */
+  --color-text-2: #9ba1aa; /* 次要文字 */
+  --color-text-3: #6c727c; /* 弱化文字 */
+  --color-accent: #ffffff; /* 主操作/激活/链接 = 纯白 */
+  --color-accent-contrast: #0d0f12; /* accent 上的文字 */
+  --color-accent-card-from: #1b1e24; /* 强调卡（中性深灰） */
+  --color-accent-card-to: #14161a;
+  --color-up: #30d158; /* 涨（夜视低炫光） */
+  --color-down: #ff453a; /* 跌 */
+  --color-warn: #e0a83e; /* 警示（暗色低饱和琥珀，护眼） */
+  --scrollbar-track: #0d0f12;
+  --scrollbar-thumb: #33373d;
+  --scrollbar-thumb-hover: #454a52;
+  --table-header-bg: #1b1e24;
+  --table-header-color: #9ba1aa;
+  --table-border: #2a2d33;
+}
+
+/* ---- 全局：Apple 字体栈（SF Pro → 苹方/微软雅黑） ---- */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+    "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Segoe UI", sans-serif;
+  background-color: var(--color-panel);
+  color: var(--color-text-1);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  transition: background-color 0.35s ease, color 0.35s ease;
+}
+
+/* 输入框自动填充跟随主题（防暗色下白底刺眼） */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--color-text-1);
+  caret-color: var(--color-text-1);
+  box-shadow: 0 0 0 1000px var(--color-panel2) inset;
+  transition: background-color 9999s ease-out;
+}
+
+/* 文字选中（跟随主题，浅色轻蓝） */
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+/* 滚动条美化（跟随主题） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* AntD 表格在两种主题下的微调 */
+.ant-table {
+  background: transparent !important;
+}
+.ant-table-thead > tr > th {
+  background: var(--table-header-bg) !important;
+  color: var(--table-header-color) !important;
+  font-weight: 600;
+}
+.ant-table-tbody > tr > td {
+  border-bottom-color: var(--table-border) !important;
+}
+
+/* 等宽数字 */
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 移动端体验 ---- */
+html {
+  -webkit-tap-highlight-color: transparent; /* 去掉移动端点按灰框 */
+}
+body {
+  padding-bottom: env(safe-area-inset-bottom); /* 底部安全区（全面屏） */
+}
+
+/* ---- 数值变化微动效（StatCard 等） ---- */
+@keyframes flash-in {
+  from {
+    opacity: 0.3;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-flash {
+  animation: flash-in 0.4s ease;
+}

@@ -1,0 +1,1 @@
+# Database module — 复刻 Freqtrade persistence 层
