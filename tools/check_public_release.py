@@ -1,4 +1,4 @@
-"""Fail a release if tracked files contain common private artifacts or tokens.
+"""Fail a release if versioned or untracked files contain private artifacts.
 
 This is a guardrail, not a replacement for manual review or GitHub secret scanning.
 """
@@ -31,7 +31,10 @@ PERSONAL_PATH = re.compile(r"(?i)C:[\\/]Users[\\/][^\\/\s]+")
 
 
 def main() -> int:
-    raw = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT)
+    raw = subprocess.check_output(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=ROOT,
+    )
     paths = [part.decode("utf-8") for part in raw.split(b"\0") if part]
     findings: list[str] = []
     for rel in paths:
@@ -58,7 +61,7 @@ def main() -> int:
                 findings.append(f"{rel}:{line_number}: possible credential")
     for finding in findings:
         print(finding)
-    print(f"Checked {len(paths)} tracked files; findings: {len(findings)}")
+    print(f"Checked {len(paths)} working-tree files; findings: {len(findings)}")
     return 1 if findings else 0
 
 
