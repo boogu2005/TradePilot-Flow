@@ -1339,3 +1339,20 @@ class DiagnosticExecutionRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_now)
     result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     verification: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+
+class DiagnosticLeaseRecord(Base):
+    __tablename__ = "diagnostic_leases"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class DiagnosticInvestigationRecord(Base):
+    __tablename__ = "diagnostic_investigations"
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    incident_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    checkpoint: Mapped[dict] = mapped_column(JSON, nullable=False)
+    archived_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_now)

@@ -177,6 +177,18 @@ class TaskManager:
         task = self._tasks.get(name)
         return task is not None and not task.done()
 
+    async def restart_registered(self, name: str) -> None:
+        """Restart only an existing factory after its old task has stopped."""
+        if name not in self._factories:
+            raise ValueError("worker is not registered")
+        task = self._tasks.get(name)
+        if task and not task.done():
+            task.cancel()
+            done, _ = await asyncio.wait({task}, timeout=5)
+            if not done:
+                raise TimeoutError("old worker did not stop; replacement refused")
+        await self.create(name, self._factories[name])
+
 
 # —————— 辅助函数 ——————
 

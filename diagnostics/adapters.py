@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +20,16 @@ def _exchange_error(source: str, exc: Exception) -> ToolResult:
 
 
 def build_read_only_tools(session_factory, log_path: Path, runbook_paths: list[Path]) -> ToolRegistry:
+    async def query_client_order(args):
+        try:
+            from exchange_engine.exchange import _to_ccxt_symbol, get_exchange
+            client = get_exchange(args["exchange"])
+            order = await client.fetch_order(args["client_order_id"], _to_ccxt_symbol(args["symbol"], args["exchange"]),
+                                            params={"clOrdId": args["client_order_id"], "trigger": args["trigger"]})
+            return ToolResult.ok("exchange_rest", {"order": order}) if order and order.get("id") else ToolResult.unknown("exchange_rest")
+        except Exception as exc:  # noqa: BLE001 - preserve query failure semantics
+            return _exchange_error("exchange_rest", exc)
+
     async def query_order(args):
         try:
             from exchange_engine.exchange import _to_ccxt_symbol, get_exchange
@@ -50,7 +61,7 @@ def build_read_only_tools(session_factory, log_path: Path, runbook_paths: list[P
         except Exception as exc:  # noqa: BLE001 - exchange failures are structured evidence
             return _exchange_error("exchange_rest", exc)
 
-    async def query_local(args):
+    def read_local(args):
         with session_factory() as session:
             trade = session.get(Trade, args["trade_id"])
             if not trade:
@@ -61,7 +72,10 @@ def build_read_only_tools(session_factory, log_path: Path, runbook_paths: list[P
                 "is_open": trade.is_open, "amount": trade.amount, "repair_retry": trade.repair_retry,
             }, "orders": [{"id": row.order_id, "status": row.status, "filled": row.filled, "role": row.ft_order_role} for row in orders]})
 
-    async def query_logs(args):
+    async def query_local(args):
+        return await asyncio.to_thread(read_local, args)
+
+    def read_logs(args):
         if not log_path.exists():
             return ToolResult.not_found("local_log", {"path": str(log_path)})
         with log_path.open("rb") as stream:
@@ -74,10 +88,15 @@ def build_read_only_tools(session_factory, log_path: Path, runbook_paths: list[P
 
     runbooks = KeywordRunbook(runbook_paths, version="2026-09-28")
 
+    async def query_logs(args):
+        return await asyncio.to_thread(read_logs, args)
+
     async def query_runbook(args):
-        return runbooks.search(args["query"], args["limit"])
+        return await asyncio.to_thread(runbooks.search, args["query"], args["limit"])
 
     return ToolRegistry([
+        DiagnosticTool("query_client_order", {"client_order_id": str, "symbol": str, "exchange": str, "trigger": bool}, query_client_order,
+                       description="Query by client id after an unknown submission outcome; trigger for algo orders."),
         DiagnosticTool("query_order", {"order_id": str, "symbol": str, "exchange": str}, query_order, description="Query one exchange order by id."),
         DiagnosticTool("query_fills", {"order_id": str, "symbol": str, "exchange": str, "limit": int}, query_fills, description="Query bounded exchange fills."),
         DiagnosticTool("query_positions", {"symbol": str, "exchange": str}, query_positions, description="Query exchange positions and observation time."),

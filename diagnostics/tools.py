@@ -26,6 +26,11 @@ class ToolRegistry:
     def __init__(self, tools: list[DiagnosticTool]):
         self._tools = {tool.name: tool for tool in tools}
 
+    def register(self, tool: DiagnosticTool) -> None:
+        if tool.name in self._tools:
+            raise ValueError("tool already registered")
+        self._tools[tool.name] = tool
+
     def descriptions(self) -> list[dict[str, Any]]:
         return [{"name": t.name, "description": t.description, "arguments": {k: v.__name__ for k, v in t.schema.items()}} for t in self._tools.values()]
 

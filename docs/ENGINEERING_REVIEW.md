@@ -1,99 +1,89 @@
 # 1. Current Architecture
 
-审查对象是 public-release。交易链路为 Telethon → asyncio 消费 → LLM JSON 解析 → 字段/来源校验 → 风控及仓位计算 → 订单/保护单 → ExitManager。WS 心跳、重连、REST 恢复和定时对账由现有模块完成。SQLAlchemy/SQLite 保存业务与独立诊断记录。
+以 public-release 的实际代码为准：Telethon 接入 → asyncio 消费 → LLM JSON 解析/标准化 → 来源关联、去重及风控 → 交易执行/订单状态 → SL/TP/ExitManager。WebSocket、Tracker、REST、Reconciler 与 TaskManager 管理持续运行。SQLAlchemy/SQLite 与 Loguru 已实现，Dashboard 独立运行。
 
-本次重点逐行检查诊断、审批、执行、持久化与任务监督，没有完成全仓库每一行的审计或真实服务联调。生产 Incident 入口包括保护单恢复耗尽、本次新增的 TaskManager 自动重启耗尽。HealthStatus 分类器和白名单恢复适配器已实现并测试，尚未全面接入线上监控。生产交易写操作未注册。
+本轮主要人工审查上述调用边界、诊断/审批/执行及存储代码；全仓库测试、编译和发布扫描覆盖更广，但不等于全仓库逐行审计。没有把技术栈历史描述当作已接入事实。
 
 # 2. Problems Found
 
-Critical：没有充分依据给出全仓库不存在严重问题的结论。
+修复：审批撤销/修改未正确阻止旧计划；执行先查后写竞态；未知执行会重发；调查无硬超时与恢复预算；模型无动作自报解决；关闭 Agent 丢事件；终止事件重复调查；数据库阻塞交易事件循环；模型预算缺输入；计划引用虚构证据；租约旧拥有者覆盖新检查点；重开调查清除审计并复用旧计划版本；监控将 REST 查询失败误当空持仓；普通下单网络失败直接再次提交。
 
-High，已修复：后续拒绝仍可能使用早先批准；执行记录先查后写没有原子抢占；执行未知结果不能恢复核查；模型无硬超时；重启清零耗时；no_action 可以自报解决；关闭 Agent 丢弃事件；无检查点事件不恢复；诊断数据库异常传播给交易恢复；修改审批没有生成新版本。
-
-Medium，已修复：终止事件被重复告警重新排队；事件和检查点状态不一致；计划版本改变造成新的等价操作标识；布尔冒充整数、负 limit、数组参数；错误字符串匹配误判不存在；缓存持仓被标记为新鲜数据；读取整份日志后才截断；常见凭证未脱敏；无进展检测不包含时间窗口；旧评估把 wrong_action=False 写死。
-
-Low，已修复：类型错误、导入规范、agent_run_id/tool_call_id 缺失。
+未将诊断测试成功解释成现有机器人不存在其他问题。旧模块广泛异常处理、部分历史模拟和部署兼容仍需要各自场景验收。
 
 # 3. Code Changes
 
-主要修改 diagnostics 内 Agent、工具、状态、审批、执行器、仓库、服务、启动、CLI、演示和评估；新增 health.py、remediation.py、redaction.py、fault_evaluation.py。core/task_manager.py 在原有自动重启耗尽后报告持久化事件。新增 15 个可靠性回归及审批修改版本回归。
+新增 monitor、runtime_control、storage、telemetry、sandbox、benchmark、core/order_submission。完善 agent、repository、approval/cli、execution、tools/model/adapters、bootstrap。main 接入存储/监控/审批派发与关闭排空；TaskManager 提供受控注册任务重启；ExchangeRuntime 提供运输连接重连。
 
-未修改现有仓位、杠杆、SL/TP、trailing、ROI 或持仓超时参数，未使用真实资金。没有新增数据库或 Agent 框架。
+持久化增加租约与历史调查表，未读取或改写生产 .env、数据库数据。交易仓位、杠杆、价格与退出策略参数未更改；网络失败处理改成一次发送后有限查询，查不清则事件升级。
 
 # 4. Workflow vs Agent Boundary
 
-Workflow 负责正常交易、明确风险规则、心跳、重连、退出和常规对账。Agent 依据新证据选择只读工具并生成计划。人工审批绑定对象、参数、版本与期限。ControlledExecutor 只执行注册回调。Agent 没有任意交易 API、shell 或 SQL 权限。
+Workflow 管确定规则、常规查询恢复、重连、交易风控和退出。LLM 信号 JSON 解析仍是固定节点。Agent 只在不明异常中按工具反馈选取下一步证据，生成计划或转人工。人工审批后，受控执行器才可调用注册恢复回调。
+
+LangGraph 的 checkpoint/interrupt 有价值，但当前单 Agent、少量分支已可复用 asyncio/SQLite 完成；未为了名称新增框架或数据库。
 
 # 5. Safety & Idempotency
 
-correlation_key 合并事件，单 Worker 队列集合去重，终止事件不重新入队。批准后拒绝或修改使旧批准失效。MODIFY 保存新版本并要求重新批准。执行前检查当前计划与实时指纹。
+correlation_key 合并重复告警；数据库租约及检查点写入屏障阻止重复调查覆盖。审批绑定版本/摘要/对象指纹/期限，CLI 要求输入所见摘要，记录 reviewer 和 OS 操作账号。修改产生未批准的新版本；补充信息重开归档旧调查并递增版本。
 
-operation_id 基于事件、目标、动作和参数，不因计划版本单独变化而变更。数据库唯一键 INSERT 抢占执行权。超时或崩溃留下 executing/pending_confirmation，恢复仅做验证，不重发动作。认领后尚未执行即崩溃仍可能一直未知，需要人工核实；不宣称跨交易所 exactly-once。
+稳定 operation_id 与数据库唯一插入抢占写动作；不因计划版本单独变化而重复执行同一动作。风险检查后再次核查指纹与审批。超时、重启或重复回调只验证原操作，不重发。认领后发送前崩溃可能无法确定是否发出，保守转人工；数据库事务不能覆盖交易所，不承诺跨系统 exactly-once。
 
 # 6. Agent Loop
 
-状态记录事件、工具参数/结果、来源和时间、候选原因、缺失信息、计划、轮数、耗时和预算。模型输出 tool/plan/escalate；非法调用转换为结构化错误。默认 7 轮，模型与工具等待有上限，重启延续累计耗时。时间窗口内等价工具、参数和结果重复会转人工。只保存决策摘要，不要求完整内部推理。
+tool → 有类型结果/证据入 State → 再决策 → plan/escalate。State 包括关联标识、来源时间、工具输入输出、候选原因摘要、待确认项、计划与预算。审批和执行记录独立可追踪。工具失败、不确定、明确不存在分别表达；非法工具和参数不进入执行适配器。
 
-当前终止状态为 waiting_human、failed、timed_out、budget_exhausted；resolved 由执行后置验证设置。waiting_approval/waiting_external_state 尚未分别建模。
+默认 7 轮，有限时间、调用数、Token；无新证据按工具+参数+等价结果+时间窗口判断。真实适配器使用供应商 usage 或保守预算。保存可审计摘要，不保存/要求内部思维。终止状态含 waiting_human、failed、timed_out、budget_exhausted；执行未知为 waiting_external_state，验证成功才 resolved。
 
 # 7. Auto Remediation
 
-现有 WS 重连和 TaskManager 重启保持 Workflow。新增适配器只接受 reconnect_websocket、refresh_exchange_snapshot、trigger_reconciliation、restart_telegram_consumer、restart_websocket_worker、restart_exit_manager。
+已注册六个生产恢复回调，全部需人工审批：消费者、WS、退出监控重启、连接恢复、快照刷新、既有对账器。已有 Workflow 的明确自动恢复继续照常执行。
 
-适配器必须经受控执行器审核，验证要求 alive、authenticated、subscribed、snapshot_fresh、exit_healthy 和 reconciliation 通过。测试使用 Fake 回调；生产回调尚未注册，不宣称线上自动恢复已完成。当前执行器保守地要求所有动作先审核。
+规则监控覆盖后台任务、消费/监控心跳、WS 连接、REST、数据库、本地/交易所持仓一致性；恢复耗尽事件覆盖保护单、TaskManager、下单结果不明。监控在启动宽限期和连续异常采样后升级，不把“没有业务推送”当断线。记录实际观察，不编造已执行恢复步骤。
+
+恢复前直接读取仓位、普通单与算法单，拒绝不完整快照、错误对象、任意参数。worker 重启要求零持仓/挂单。恢复后检查存活、连接订阅、快照/本地一致、保护单引用与退出监控心跳。未确认最多核查 120 秒，之后等待人工；不得将工具返回成功当业务已修复。
 
 # 8. Tests
 
-```powershell
-python -m pytest -q -p no:cacheprovider
-python -m ruff check diagnostics
-python -m mypy diagnostics --follow-imports skip --ignore-missing-imports --check-untyped-defs
-python -m compileall -q diagnostics core database exchange_engine exit signal_engine telegram_engine backend
-python -m diagnostics.fault_evaluation
-python -m diagnostics.demo
-```
+本轮全量 pytest 142 passed（后续提交前再次运行）。诊断模块及新订单提交模块 Ruff 通过；diagnostics 的 mypy 跳过外部模块导入内部分析，覆盖 25 个文件。编译检查覆盖主程序、诊断、交易、退出、信号、Telegram、数据库及后端。Dashboard TypeScript/Vite 构建通过。
 
-实测全量测试 129 passed；故障专项 n=15、15 passed。诊断模块 lint 通过，类型检查覆盖 19 个文件。类型检查跳过其他模块导入内部检查，不能宣称全仓库严格类型通过。
+测试含独立 Python 进程间恢复、租约失效、审批状态变化、后台只派发已批计划、数据库故障 spool、下单响应丢失但已成交。开发依赖独立于生产 requirements。CI 的 pytest/场景评估配置已在本地准备，但当前 GitHub OAuth 凭证缺少 workflow scope，未能上传该工作流改动；原远端 CI 保持原配置。可先手动运行本报告命令。
 
-全仓库 `python -m ruff check . --output-format concise --statistics` 实测未通过：1096 项发现，主要涉及导入、旧类型注解、未使用变量、宽泛异常。两个特别核查项：批量取消闭包当前在每次循环内 await，未观察到跨迭代延迟执行；旧模拟 SimTrade 的重复 open_rate 最终采用后一个默认值。未对这些旧模块做整库自动格式重写。发布扫描覆盖 236 个工作树文件，0 项发现。
+全仓库旧 lint 仍非零，不能把局部静态检查写成全仓库质量门禁通过；没有批量自动重写无关业务模块。
 
 # 9. Evaluation
 
-fault_evaluation 运行固定测试文件并读取真实 JUnit XML，报告每条断言结果与耗时。覆盖模型挂起、无证据自报解决、无检查点恢复、数据库故障、非法参数、拒绝旧审批、响应丢失、并发回调、安静及断线 WS、SQLite 重新创建仓库、恢复健康/对账、重启预算、脱敏。
+[业务评估](diagnostics/evaluation-results.json)：15/15 场景断言通过，9 resolved、5 waiting_human、1 模型故障 failed，21 次工具调用、32 轮，动作账本错误/重复均 0。详细解释见 [评估说明](diagnostics/EVALUATION.md)。
 
-这 15 个回归不等同于需求中全部 15 个端到端业务场景。外部模型 Token、模型工具选择准确率、执行过的 Pure Workflow 基准、业务错误动作率没有测得，明确留空。旧 evaluation 只保留为 10 项脚本契约样例，历史“零错误动作”和“100% 正确率”不得用于生产或面试效果宣传。
+模型为证据驱动的确定性替身，无外部模型消耗。参考 Workflow 实际执行，但不是完整旧机器人历史回放；不能据此编造生产准确率或提升幅度。另有 15/15 JUnit 安全故障断言。
 
 # 10. Remaining Limitations
 
-- 未完成全仓库逐行审查、真实 Telegram/交易所/LLM 联调和全部业务故障端到端验收。
-- 监控来源统一 Alert→Recovery→Incident 尚未全面接通；生产目前只有两个恢复耗尽入口。
-- 同步 SQLAlchemy/日志 IO 仍可能短时占用事件循环；数据库不可用只能记录错误，不能保证事件不丢。
-- 没有多进程 Agent 租约或关闭事件的新代次，按单进程单诊断 Worker 使用。
-- Token 只是决策输出估算，没有供应商实际 usage 或完整上下文预算。
-- CLI reviewer 是本地身份声明，没有 RBAC；完整 Trace、已确认历史案例和补充信息重开流程尚未完成。
-- 真实动作的实时指纹、前提、风险和后置条件需要逐个 handler 实现；生产 handler 尚未注册。
-- 常见格式脱敏不能证明覆盖所有凭证形式。
+- 未启动真实 Telegram/OKX/模型服务或服务器部署，未用真实资金测试；外部字段、权限、限频和真实模型选工具质量需在测试环境验收。
+- 人工入口是本地主机 CLI，没有 Web 审批/RBAC；主机与数据库文件访问权限必须由部署方管理。
+- 事件有界内存队列在落盘前被强制终止可能丢失；数据库故障且 spool 已落盘时可恢复。终止事件再次故障默认人工重开，未自动创建新一代事件。
+- 执行前检查与外部动作不能原子化；其他交易线程/人工交易仍可在最后一次检查后改变状态。执行记录避免诊断动作盲目重发，无法为交易所提供分布式原子事务。
+- 生产仅白名单恢复；演示用 sync_local_order 不开放为生产任意改账工具。受控重启不接受持仓中的任意 worker 替换。
+- 未完成全仓库逐行审计；广泛历史代码的 lint 与部分旧模拟差异没有通过大规模无关重构掩盖。当前验证是可运行闭环与明确边界的证明。
+- RAG 是版本化手册检索，没有自动沉淀未验证结论，没有向量数据库。未宣称接入 LangGraph/Redis/PostgreSQL/Prometheus。
 
 # 11. Demo Guide
 
-安装原 requirements 后，从仓库根目录执行 `python -m diagnostics.demo`。反馈驱动的离线模型替身依次根据证据选择查询或转人工，正常路径包含计划、模拟批准、受控执行、验证，输出 incident.status=resolved、execution.status=verified。
+详见 [运行文档](DIAGNOSTIC_AGENT.md)。sandbox 提供 init → investigate → status → review → execute → status，每步独立进程；支持审批间修改仓位、重复执行和超时回放。demo 是单命令内存模拟。cli 查看生产完整 Trace、按摘要审核、补充信息重开。
 
-`python -m diagnostics.fault_evaluation` 运行真实故障回归。`python -m diagnostics.cli list` 和 `python -m diagnostics.cli show ID` 查看生产事件、检查点和审批。
+DIAGNOSTIC_AGENT_ENABLED=0 停止调查但保留事件。DIAGNOSTIC_EXECUTION_ENABLED=0 停止审批恢复派发。两者独立；正常交易 Workflow 不受这两个诊断开关控制。
 
-`DIAGNOSTIC_AGENT_ENABLED=0` 关闭调查但保留事件；启用后恢复 open/investigating。演示是内存模式，进程恢复另由 SQLite 测试验证，尚未提供可中断的交互式持久化演示。
+# 12. Interview Explanation（3–5 分钟）
 
-# 12. Interview Explanation
+这个项目的起点是 Telegram 信号交易机器人。我保留了确定性的交易主流程，因为去重、来源关联、仓位计算、精度、风险限制和退出规则都需要可重复验证。自然语言解析虽然用了大模型，本质上仍是流程里的固定 JSON 节点，没有必要叫自主 Agent。
 
-这个项目原本是 Telegram 信号交易机器人。我保留确定性的交易主流程，因为仓位计算、风险限制、下单和退出都有明确规则，需要可重复验证。大模型解析 JSON 是固定节点，不拥有交易权限。
+Agent 放在常规恢复不能解释结果的位置。比如下单超时，系统不能直接当作失败重下。我先修正 Workflow：只发送一次，按客户端订单号有限查询；如果确认已成交，就按原业务处理。只有仍不确定时才进入诊断。Agent 下一步可能查成交、持仓、本地记录或错误码手册，选择取决于上一条证据。它的价值是动态收集证据，而不是替代明确的交易规则。
 
-Agent 放在常规恢复耗尽后的诊断环节。例如下单响应超时，不能直接认定下单失败。调查需要根据订单结果决定是否继续查成交、本地记录或持仓。下一次查询依赖上一步证据，这部分适合受限 Agent。第一版用单 Agent，因为一个状态循环就能覆盖调查；多个 Agent 会增加协调和重复操作风险，目前没有证据支持这种成本。
+我选择单 Agent，没有上多个 Agent，也没有为了展示框架接入 LangGraph。当前 asyncio 生命周期和 SQLAlchemy 状态已经够用。若以后调查分支、跨任务等待和人工中断显著增加，可以再评估状态图框架；换框架不会消除业务审批与幂等问题。
 
-预警由规则产生，因为断线和重启次数是明确事实。Agent 的任务是解释未知状态，不能修改风险阈值。它只有只读工具，输入校验类型、数量和长度，输出保留来源、时间与错误类型。接口超时表示未知，不能变成没有订单或零持仓。
+工具都是只读的，输入、范围、返回长度和超时受限制。查询失败、未知和确认不存在是三个不同结果；日志与手册只是数据，不能改变权限。模型只能提出带对象、参数、证据、前提、风险和后置条件的计划。代码检查证据引用，预算限制轮数、时间、调用数和词元，等价结果反复出现时转人工。
 
-调查保存检查点、工具记录和决策摘要，默认最多七轮，并限制工具次数、累计时间和估算预算。相同工具、参数和等价结果在窗口内重复就转人工。模型挂起也有硬超时，诊断失败不会主动停止其他交易任务。同步存储仍存在阻塞风险，这也是后续需要改善的工程边界。
+审批不是一个简单布尔值。它绑定计划版本、摘要、参数、对象指纹和有效期。改计划要重批，持仓变化要重新取证。执行器在风险检查后再次读取状态，只有白名单回调可被调用。真实恢复回调已接入生产入口，但我们没有通过真实资金验证它；演示与故障测试全部在独立模拟数据库里做。
 
-模型提出计划后还不能执行。人工审批绑定版本、参数、对象指纹和期限，修改会形成新版本。执行器重新检查实时状态与风险，只允许注册动作。数据库用唯一操作标识抢占执行权；响应丢失时后续只核查，不再次发送。这是防重复发起机制，不是数据库事务能覆盖交易所的 exactly-once 保证。认领后执行前崩溃时宁可保留未知，也不能贸然重发。
+重复执行由稳定 operation_id 和数据库唯一认领处理。响应丢失后恢复只做核查，不重新发送。调查有租约，过期旧 worker 的检查点会被拒绝。人工补充信息重开会保留旧调用记录并递增版本。要坦诚的是，数据库不能和交易所一起提交事务；认领后、发送前崩溃可能无法确定结果，我选择保留未知并转人工。
 
-Tool success 不等于业务完成。例如进程重启成功，还要认证、订阅、刷新快照、确认退出管理健康并对账。订单操作要重新查最终状态。未确认时保持待确认，成交不能通过所谓回滚抹去。
-
-这次 Review 也纠正了上一版评估：把错误动作写死为零没有证据价值。现在报告真实运行的故障断言及 JUnit 数据，未测量的模型质量与 Workflow 效果对比明确留空。项目已证明受限调查、审核执行和恢复核查机制可测试、可演示；生产写适配器及完整监控覆盖仍需继续实施。相比纯 Workflow，Agent 的目标是处理未知异常时动态收集和组织证据，这个收益还需要真实模型与足够样本验证。
+最后，成功标准是业务后置条件。重启一个任务不代表系统健康，还要查连接订阅、快照、持仓一致性和保护单，超过核查期限不能宣布修复。评估记录真实工具路径和动作次数；15 个模拟场景通过、零重复动作只说明这些固定案例，不能推导真实模型准确率或生产收益。常规断线恢复适合 Workflow，证据冲突时动态调查才是 Agent 的使用边界。

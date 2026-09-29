@@ -202,6 +202,8 @@ async def order_monitor(shutdown_event: asyncio.Event, exit_manager: ExitManager
                 # v5: Single 600s low-frequency health check
                 if now_t - _last_reconcile_time >= 600:
                     stats = await reconcile(session)
+                    from diagnostics.telemetry import observe
+                    observe("reconciliation", "NORMAL" if stats.get("status") == "ok" else "DEGRADED", result=stats)
                     _last_reconcile_time = now_t
                 else:
                     stats = {}
@@ -215,6 +217,8 @@ async def order_monitor(shutdown_event: asyncio.Event, exit_manager: ExitManager
                     _last_reconcile_log_time = now_t
             except Exception as e:
                 logger.warning(f"[监控-协调] 状态协调异常: {e}")
+                from diagnostics.telemetry import observe
+                observe("reconciliation", "FAILED", error_type=type(e).__name__)
 
             # 同步后重新查询活跃 trade（部分可能已被同步标记为关闭）
             active_trades = Trade.get_active_trades(session)
@@ -227,8 +231,10 @@ async def order_monitor(shutdown_event: asyncio.Event, exit_manager: ExitManager
                     try:
                         from exchange_engine.exchange import fetch_positions
                         _okx_positions_cache = await fetch_positions(exchange="okx")
-                    except Exception:
-                        _okx_positions_cache = []
+                    except Exception as exc:
+                        from diagnostics.telemetry import observe
+                        observe("rest_positions", "UNKNOWN", error_type=type(exc).__name__)
+                        raise  # Failed query is not evidence of zero positions.
                 return _okx_positions_cache
 
             for trade in active_trades:
@@ -1439,6 +1445,21 @@ async def start_services(
     from diagnostics.bootstrap import build_service as build_diagnostic_service
     diagnostic_service = build_diagnostic_service(parser)
     if diagnostic_service is not None:
+        from diagnostics.runtime_control import RuntimeControl
+        from diagnostics.monitor import DiagnosticMonitor
+        from core.exchange_runtime import runtime as diagnostic_runtime
+        control = RuntimeControl(tasks, listener, _HEARTBEAT, shutdown_event, get_session, ex, diagnostic_runtime)
+        monitor = DiagnosticMonitor(diagnostic_service, control)
+        if diagnostic_service.agent:
+            from diagnostics.tools import DiagnosticTool
+            from diagnostics.domain import ToolResult
+            async def runtime_evidence(_):
+                fingerprint = await control.fingerprint(None)
+                return ToolResult.ok("runtime", {"fingerprint": fingerprint, "health": diagnostic_runtime.get_health(),
+                                               "allowed_recovery_actions": sorted(monitor.executor.handlers)})
+            diagnostic_service.agent.tools.register(DiagnosticTool("query_runtime_state", {}, runtime_evidence, timeout_seconds=25))
+        await tasks.create("诊断事件存储", lambda: diagnostic_service.ingest(shutdown_event))
+        await tasks.create("诊断规则监控", lambda: monitor.run(shutdown_event))
         await tasks.create(
             "异常诊断Agent",
             lambda: diagnostic_service.run(shutdown_event),
@@ -1493,6 +1514,13 @@ async def shutdown_services(
         shutdown_event.set()
 
     # 2. 取消所有任务（等待结束，timeout=10s）
+    from diagnostics.service import current_service
+    diagnostic_service = current_service()
+    if diagnostic_service:
+        try:
+            await asyncio.wait_for(diagnostic_service.incoming.join(), timeout=5)
+        except asyncio.TimeoutError:
+            logger.warning("[Diagnostics] ingress did not drain before shutdown; inspect spool")
     await tasks.cancel_all(timeout=10.0)
 
     # 3. 停止交易所监督器

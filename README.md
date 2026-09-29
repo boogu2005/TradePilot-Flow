@@ -77,7 +77,9 @@ python -m diagnostics.fault_evaluation
 python -m pytest -q tests -k diagnostic
 ```
 
-工程审查、已修复问题、实测验证和剩余限制见 [docs/ENGINEERING_REVIEW.md](docs/ENGINEERING_REVIEW.md)。`evaluation` 是脚本契约样例，不提供真实模型效果或 Workflow 提升指标；`fault_evaluation` 实际执行故障回归并从 JUnit 结果生成报告。演示采用模拟批准和内存状态，SQLite 恢复由独立测试验证。
+工程审查、已修复问题、实测验证和剩余限制见 [docs/ENGINEERING_REVIEW.md](docs/ENGINEERING_REVIEW.md)。`evaluation` 执行 15 个模拟业务场景和保守参考 Workflow，记录实际工具调用与动作次数；它不代表真实模型效果或完整旧机器人提升指标。`fault_evaluation` 从真实 JUnit 结果生成安全回归报告。
+
+需要逐步人工操作及跨进程恢复时，使用 `python -m diagnostics.sandbox --db user_data/diagnostic-lab.db init`，然后依次运行 `investigate`、`status`、`review`、`execute`、`status`。完整命令、审核摘要绑定和关闭开关见运行文档。生产恢复后台已接入，所有诊断写动作须人工批准。
 
 ## 安全与隐私
 

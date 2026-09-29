@@ -3,19 +3,21 @@ from __future__ import annotations
 import copy
 import uuid
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from database.models import (
     DiagnosticApprovalRecord,
     DiagnosticExecutionRecord,
     DiagnosticIncidentRecord,
+    DiagnosticInvestigationRecord,
+    DiagnosticLeaseRecord,
 )
 
-from .domain import Approval, Evidence, Incident, IncidentInput
+from .domain import Approval, Evidence, Incident, IncidentInput, InvestigationBusy
 
 
 def _aware(value: datetime) -> datetime:
@@ -39,8 +41,82 @@ def _incident_from_record(row: DiagnosticIncidentRecord) -> Incident:
 
 
 class DiagnosticRepository:
+    blocking_io = True
     def __init__(self, session_factory: Callable):
         self._sessions = session_factory
+
+    def claim_lease(self, key: str, owner: str, seconds: float) -> bool:
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(seconds=seconds)
+        with self._sessions() as session:
+            changed = session.execute(update(DiagnosticLeaseRecord).where(
+                DiagnosticLeaseRecord.key == key, DiagnosticLeaseRecord.expires_at <= now,
+            ).values(owner=owner, expires_at=expires)).rowcount
+            if changed:
+                session.commit()
+                return True
+            session.add(DiagnosticLeaseRecord(key=key, owner=owner, expires_at=expires))
+            try:
+                session.commit()
+                return True
+            except IntegrityError:
+                session.rollback()
+                return False
+
+    def release_lease(self, key: str, owner: str) -> None:
+        with self._sessions() as session:
+            session.execute(delete(DiagnosticLeaseRecord).where(
+                DiagnosticLeaseRecord.key == key, DiagnosticLeaseRecord.owner == owner,
+            ))
+            session.commit()
+
+    def executions_for(self, incident_id: str) -> list[dict]:
+        with self._sessions() as session:
+            rows = session.scalars(select(DiagnosticExecutionRecord).where(
+                DiagnosticExecutionRecord.incident_id == incident_id,
+            )).all()
+            return [{column.name: getattr(row, column.name) for column in row.__table__.columns} for row in rows]
+
+    def reopen(self, incident_id: str, information: dict) -> Incident:
+        with self._sessions() as session:
+            row = session.get(DiagnosticIncidentRecord, incident_id)
+            if row is None:
+                raise KeyError(incident_id)
+            if row.status in ("open", "investigating"):
+                raise ValueError("investigation is already active")
+            uncertain = session.scalar(select(DiagnosticExecutionRecord.operation_id).where(
+                DiagnosticExecutionRecord.incident_id == incident_id,
+                DiagnosticExecutionRecord.status.in_(("executing", "pending_confirmation")),
+            ))
+            if uncertain:
+                raise ValueError("verify uncertain execution before reopening")
+            checkpoint = dict(row.checkpoint or {})
+            run_id = checkpoint.get("agent_run_id", uuid.uuid4().hex)
+            if not session.get(DiagnosticInvestigationRecord, run_id):
+                session.add(DiagnosticInvestigationRecord(run_id=run_id, incident_id=incident_id, checkpoint=copy.deepcopy(checkpoint)))
+            previous_version = (checkpoint.get("plan") or {}).get("version", checkpoint.get("plan_version_floor", 1))
+            checkpoint["plan_version_floor"] = int(previous_version or 1) + 1
+            checkpoint["status"] = "investigating"
+            checkpoint["termination_reason"] = None
+            checkpoint["step"] = 0
+            checkpoint["elapsed_seconds"] = 0
+            checkpoint["token_usage"] = 0
+            checkpoint["tool_calls"] = []
+            checkpoint["plan"] = None
+            checkpoint["agent_run_id"] = uuid.uuid4().hex
+            checkpoint["started_at"] = datetime.now(timezone.utc).isoformat()
+            row.checkpoint = checkpoint
+            row.status = "open"
+            row.evidence = [*(row.evidence or []), Evidence("human", "additional_information", information).to_dict()][-100:]
+            session.commit()
+            return _incident_from_record(row)
+
+    def investigations_for(self, incident_id: str) -> list[dict]:
+        with self._sessions() as session:
+            rows = session.scalars(select(DiagnosticInvestigationRecord).where(
+                DiagnosticInvestigationRecord.incident_id == incident_id,
+            ).order_by(DiagnosticInvestigationRecord.archived_at)).all()
+            return [{"run_id": row.run_id, "checkpoint": row.checkpoint, "archived_at": row.archived_at} for row in rows]
 
     def report(self, value: IncidentInput) -> Incident:
         with self._sessions() as session:
@@ -62,7 +138,7 @@ class DiagnosticRepository:
                 row.occurrences += 1
                 row.recovery_steps = list(dict.fromkeys([*(row.recovery_steps or []), *value.recovery_steps]))
                 known = {item["id"] for item in (row.evidence or [])}
-                row.evidence = [*(row.evidence or []), *(item for item in evidence if item["id"] not in known)]
+                row.evidence = [*(row.evidence or []), *(item for item in evidence if item["id"] not in known)][-100:]
             session.commit()
             session.refresh(row)
             return _incident_from_record(row)
@@ -74,8 +150,22 @@ class DiagnosticRepository:
                 raise KeyError(incident_id)
             return _incident_from_record(row)
 
-    def save_checkpoint(self, incident_id: str, checkpoint: dict[str, Any]) -> None:
+    def save_checkpoint(self, incident_id: str, checkpoint: dict[str, Any], lease_owner: str | None = None) -> None:
         with self._sessions() as session:
+            if lease_owner is not None:
+                lease = select(DiagnosticLeaseRecord.key).where(
+                    DiagnosticLeaseRecord.key == incident_id,
+                    DiagnosticLeaseRecord.owner == lease_owner,
+                    DiagnosticLeaseRecord.expires_at > datetime.now(timezone.utc),
+                ).exists()
+                changed = session.execute(update(DiagnosticIncidentRecord).where(
+                    DiagnosticIncidentRecord.id == incident_id, lease,
+                ).values(checkpoint=copy.deepcopy(checkpoint), status=checkpoint["status"])).rowcount
+                if not changed:
+                    session.rollback()
+                    raise InvestigationBusy("checkpoint rejected: lease lost")
+                session.commit()
+                return
             row = session.get(DiagnosticIncidentRecord, incident_id)
             if row is None:
                 raise KeyError(incident_id)
@@ -179,6 +269,21 @@ class InMemoryDiagnosticRepository:
         self.checkpoints: dict[str, dict[str, Any]] = {}
         self.approvals: list[Approval] = []
         self.executions: dict[str, dict[str, Any]] = {}
+        self.leases: dict[str, tuple[str, datetime]] = {}
+
+    def claim_lease(self, key: str, owner: str, seconds: float) -> bool:
+        now = datetime.now(timezone.utc)
+        if key in self.leases and self.leases[key][1] > now:
+            return False
+        self.leases[key] = (owner, now + timedelta(seconds=seconds))
+        return True
+
+    def release_lease(self, key: str, owner: str) -> None:
+        if key in self.leases and self.leases[key][0] == owner:
+            del self.leases[key]
+
+    def executions_for(self, incident_id: str) -> list[dict]:
+        return [copy.deepcopy(row) for row in self.executions.values() if row["incident_id"] == incident_id]
 
     def report(self, value: IncidentInput) -> Incident:
         if value.correlation_key in self.by_key:
@@ -187,6 +292,7 @@ class InMemoryDiagnosticRepository:
             item.last_seen_at = value.occurred_at
             item.recovery_steps = list(dict.fromkeys([*item.recovery_steps, *value.recovery_steps]))
             item.evidence.extend(value.evidence)
+            item.evidence = item.evidence[-100:]
             return copy.deepcopy(item)
         item = Incident(
             id=str(uuid.uuid4()), correlation_key=value.correlation_key,
@@ -202,7 +308,11 @@ class InMemoryDiagnosticRepository:
     def get_incident(self, incident_id: str) -> Incident:
         return copy.deepcopy(self.incidents[incident_id])
 
-    def save_checkpoint(self, incident_id: str, checkpoint: dict[str, Any]) -> None:
+    def save_checkpoint(self, incident_id: str, checkpoint: dict[str, Any], lease_owner: str | None = None) -> None:
+        if lease_owner is not None:
+            lease = self.leases.get(incident_id)
+            if lease is None or lease[0] != lease_owner or lease[1] <= datetime.now(timezone.utc):
+                raise InvestigationBusy("checkpoint rejected: lease lost")
         self.checkpoints[incident_id] = copy.deepcopy(checkpoint)
         self.incidents[incident_id].status = checkpoint.get("status", self.incidents[incident_id].status)
 

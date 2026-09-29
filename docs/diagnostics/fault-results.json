@@ -1,0 +1,86 @@
+{
+  "kind": "executed_safety_fault_tests",
+  "n": 15,
+  "passed": 15,
+  "exit_code": 0,
+  "cases": [
+    {
+      "name": "test_model_hang_is_bounded",
+      "latency_seconds": 0.026,
+      "passed": true
+    },
+    {
+      "name": "test_no_action_cannot_self_certify_resolution",
+      "latency_seconds": 0.003,
+      "passed": true
+    },
+    {
+      "name": "test_open_incident_recovers_without_checkpoint",
+      "latency_seconds": 0.0,
+      "passed": true
+    },
+    {
+      "name": "test_database_failure_does_not_escape_workflow_hook",
+      "latency_seconds": 0.001,
+      "passed": true
+    },
+    {
+      "name": "test_array_arguments_are_rejected",
+      "latency_seconds": 0.001,
+      "passed": true
+    },
+    {
+      "name": "test_latest_rejection_revokes_approval",
+      "latency_seconds": 0.001,
+      "passed": true
+    },
+    {
+      "name": "test_timeout_recovery_verifies_without_replaying_action",
+      "latency_seconds": 0.004,
+      "passed": true
+    },
+    {
+      "name": "test_concurrent_callbacks_only_execute_once",
+      "latency_seconds": 0.012,
+      "passed": true
+    },
+    {
+      "name": "test_websocket_quiet_is_normal",
+      "latency_seconds": 0.004,
+      "passed": true
+    },
+    {
+      "name": "test_websocket_disconnect_is_workflow_degradation",
+      "latency_seconds": 0.0,
+      "passed": true
+    },
+    {
+      "name": "test_invalid_limits_never_reach_tool",
+      "latency_seconds": 0.003,
+      "passed": true
+    },
+    {
+      "name": "test_sqlite_restart_restores_approval_and_claim",
+      "latency_seconds": 0.398,
+      "passed": true
+    },
+    {
+      "name": "test_restart_worker_verifies_health_and_reconciliation",
+      "latency_seconds": 0.005,
+      "passed": true
+    },
+    {
+      "name": "test_restart_consumes_existing_time_budget",
+      "latency_seconds": 0.002,
+      "passed": true
+    },
+    {
+      "name": "test_credentials_are_redacted",
+      "latency_seconds": 0.001,
+      "passed": true
+    }
+  ],
+  "model_tokens": null,
+  "baseline_comparison": null,
+  "limitations": "No external model calls. Latency is test execution time. This measures safety assertions, not model effectiveness or a trading error rate."
+}

@@ -33,7 +33,7 @@ def test_tool_feedback_changes_next_investigation_step():
         {"kind": "tool", "tool": "query_order", "arguments": {"order_id": "abc"}},
         {"kind": "plan", "candidate_causes": [{"cause": "response_lost", "because": "REST says filled"}],
          "plan": {"target": {"type": "order", "id": "abc"}, "action": "sync_local_order",
-                  "parameters": {"state": "filled"}, "evidence_ids": ["latest"],
+                  "parameters": {"state": "filled"}, "evidence_ids": [item.evidence[0].id],
                   "preconditions": ["order remains filled"], "risk": "medium",
                   "expected_result": "local order matches exchange", "verification": ["local state is filled"]}},
     ])

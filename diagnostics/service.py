@@ -1,20 +1,79 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import uuid
+from dataclasses import asdict
 from datetime import datetime, timezone
+from pathlib import Path
 
 from loguru import logger
 
 from .domain import Evidence, IncidentInput
+from .storage import repository_call
 
 
 class IncidentService:
-    def __init__(self, repository, agent=None, *, enabled: bool = False, queue_size: int = 100):
+    def __init__(self, repository, agent=None, *, enabled: bool = False, queue_size: int = 100, spool_path=None):
         self.repository = repository
         self.agent = agent
         self.enabled = enabled
         self.queue: asyncio.Queue[str] = asyncio.Queue(maxsize=queue_size)
         self._queued: set[str] = set()
+        self.spool_path = Path(spool_path) if spool_path else None
+        self.incoming: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
+
+    def submit_nowait(self, value):
+        try:
+            self.incoming.put_nowait(value)
+        except asyncio.QueueFull:
+            logger.error("[Diagnostics] ingress queue full; alert was not accepted")
+
+    def _spool(self, value):
+        if not self.spool_path:
+            return None
+        self.spool_path.mkdir(parents=True, exist_ok=True)
+        from .redaction import redact
+        path = self.spool_path / f"{uuid.uuid4().hex}.json"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(redact(asdict(value)), default=str), encoding="utf-8")
+        temporary.replace(path)
+        return path
+
+    async def ingest(self, shutdown_event):
+        while not shutdown_event.is_set() or not self.incoming.empty():
+            try:
+                value = await asyncio.wait_for(self.incoming.get(), timeout=.5)
+            except asyncio.TimeoutError:
+                await self.replay_spool()
+                continue
+            try:
+                path = await asyncio.to_thread(self._spool, value)
+                item = await repository_call(self.repository, "report", value)
+                if path:
+                    await asyncio.to_thread(path.unlink, missing_ok=True)
+                if self.enabled and item.status in ("open", "investigating") and item.id not in self._queued and not self.queue.full():
+                    self.queue.put_nowait(item.id)
+                    self._queued.add(item.id)
+            except Exception as exc:  # noqa: BLE001 - preserve spool and trading liveness
+                logger.error("[Diagnostics] ingest failed type={}", type(exc).__name__)
+            finally:
+                self.incoming.task_done()
+
+    async def replay_spool(self):
+        if not self.spool_path:
+            return
+        spool_path = self.spool_path
+        paths = await asyncio.to_thread(lambda: list(spool_path.glob("*.json"))[:100])
+        for path in paths:
+            try:
+                raw = json.loads(await asyncio.to_thread(path.read_text, encoding="utf-8"))
+                raw["occurred_at"] = datetime.fromisoformat(raw["occurred_at"])
+                raw["evidence"] = [Evidence.from_dict(value) for value in raw.get("evidence", [])]
+                await repository_call(self.repository, "report", IncidentInput(**raw))
+                await asyncio.to_thread(path.unlink, missing_ok=True)
+            except Exception:  # noqa: BLE001 - retry durable spool after storage recovers
+                return
 
     def report_nowait(self, value: IncidentInput):
         try:
@@ -44,22 +103,33 @@ class IncidentService:
         return count
 
     async def run(self, shutdown_event: asyncio.Event) -> None:
-        self.enqueue_resumable()
+        ids = await repository_call(self.repository, "resumable_ids") if self.enabled else []
+        for item_id in ids:
+            if item_id not in self._queued and not self.queue.full():
+                self.queue.put_nowait(item_id)
+                self._queued.add(item_id)
         while not shutdown_event.is_set():
             try:
                 incident_id = await asyncio.wait_for(self.queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
-                self.enqueue_resumable()
+                # Query off-thread; asyncio.Queue mutations remain on its owner loop.
+                ids = await repository_call(self.repository, "resumable_ids") if self.enabled else []
+                for item_id in ids:
+                    if item_id not in self._queued and not self.queue.full():
+                        self.queue.put_nowait(item_id)
+                        self._queued.add(item_id)
                 continue
             try:
                 if self.agent:
-                    self.repository.set_status(incident_id, "investigating")
                     state = await self.agent.run(incident_id)
-                    self.repository.set_status(incident_id, state.status)
+                    await repository_call(self.repository, "set_status", incident_id, state.status)
             except Exception as exc:  # noqa: BLE001 - isolate one diagnostic task
+                from .agent import InvestigationBusy
+                if isinstance(exc, InvestigationBusy):
+                    continue
                 logger.error(f"[Diagnostics] incident={incident_id} failed: {type(exc).__name__}")
                 try:
-                    self.repository.set_status(incident_id, "failed")
+                    await repository_call(self.repository, "set_status", incident_id, "failed")
                 except Exception:  # noqa: BLE001 - report unavailable failure storage
                     logger.error("[Diagnostics] could not persist failure status")
             finally:
@@ -76,6 +146,8 @@ def configure_service(service: IncidentService | None) -> None:
 
 
 def report_nowait(value: IncidentInput):
+    if _service and _service.spool_path:
+        return _service.submit_nowait(value)
     return _service.report_nowait(value) if _service else None
 
 

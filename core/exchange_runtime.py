@@ -382,6 +382,13 @@ class ExchangeRuntime:
             },
         }
 
+    async def reconnect_transport(self) -> None:
+        """Controlled transport-only restart; retains credentials and trading rules."""
+        if self._ws_conn is None:
+            raise RuntimeError("WebSocket has not been initialized")
+        await self._ws_conn.stop()
+        await self._ws_conn.start()
+
     @property
     def is_ready(self) -> bool:
         return self._ready

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from .agent import DiagnosticAgent
 from .approval import ApprovalService
@@ -34,13 +35,13 @@ async def _run_demo() -> dict:
         DiagnosticTool("query_order", {"order_id": str}, query_exchange),
         DiagnosticTool("query_local", {"order_id": str}, query_local),
     ])
-    decisions = [
+    decisions: list[dict[str, Any]] = [
         {"kind": "tool", "tool": "query_order", "arguments": {"order_id": "demo-order-001"}},
         {"kind": "tool", "tool": "query_local", "arguments": {"order_id": "demo-order-001"}},
         {"kind": "plan", "candidate_causes": [{"cause": "exchange_response_lost", "because": "exchange filled while local stayed pending"}],
          "plan": {"version": 1, "target": {"type": "order", "id": "demo-order-001", "fingerprint": "order-v1"},
                   "action": "sync_local_order", "parameters": {"state": "closed", "filled": 1.0},
-                  "evidence_ids": ["exchange-query", "local-query"],
+                  "evidence_ids": [],
                   "preconditions": ["exchange order remains closed and filled"], "risk": "medium",
                   "expected_result": "local order matches exchange", "verification": ["local state is closed", "local filled is 1.0"]}},
     ]
@@ -59,6 +60,7 @@ async def _run_demo() -> dict:
                 return decisions[1]
             if observation.data.get("state") != "pending":
                 return {"kind": "escalate", "reason": "local state changed; new review required"}
+            decisions[2]["plan"]["evidence_ids"] = [call.tool_call_id for call in current.tool_calls]
             return decisions[2]
 
     model = EvidenceDrivenDemoModel()

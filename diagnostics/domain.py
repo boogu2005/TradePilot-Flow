@@ -12,6 +12,10 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class InvestigationBusy(RuntimeError):
+    """Investigation is owned by another worker or its lease has expired."""
+
+
 def stable_digest(value: Any) -> str:
     raw = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -146,6 +150,8 @@ class AgentState:
     plan: DiagnosticPlan | None = None
     termination_reason: str | None = None
     agent_run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    lease_owner: str | None = field(default=None, repr=False)
+    plan_version_floor: int = 1
 
     @classmethod
     def from_checkpoint(cls, incident: Incident, value: dict[str, Any]) -> AgentState:
@@ -178,6 +184,7 @@ class AgentState:
             pending_information=list(value.get("pending_information") or []),
             plan=plan, termination_reason=value.get("termination_reason"),
             agent_run_id=value.get("agent_run_id", uuid.uuid4().hex),
+            plan_version_floor=int(value.get("plan_version_floor", 1)),
         )
 
     def to_checkpoint(self) -> dict[str, Any]:
@@ -186,6 +193,7 @@ class AgentState:
             "agent_run_id": self.agent_run_id, "correlation_id": self.incident.correlation_key,
             "started_at": self.started_at.isoformat(), "elapsed_seconds": self.elapsed_seconds,
             "token_usage": self.token_usage,
+            "plan_version_floor": self.plan_version_floor,
             "candidate_causes": self.candidate_causes,
             "pending_information": self.pending_information,
             "plan": asdict(self.plan) if self.plan else None,
