@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from loguru import logger
 from sqlalchemy import func, select
 
+from utils.time import ensure_utc
+
 from ..database import db
 from ..models import bot_models
 from .common import as_utc, round2, safe_div, to_float, to_int
@@ -29,7 +31,7 @@ def _parse_dt(value) -> datetime | None:
 def _hold_seconds(open_dt, close_dt) -> int | None:
     if open_dt is None or close_dt is None:
         return None
-    diff = close_dt - open_dt
+    diff = ensure_utc(close_dt) - ensure_utc(open_dt)
     return max(0, int(diff.total_seconds()))
 
 
