@@ -15,10 +15,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
+
 from loguru import logger
 
-from .states import ServiceRegistry, ModuleState
+from .states import ModuleState, ServiceRegistry
 
 
 class TaskManager:
@@ -27,6 +28,7 @@ class TaskManager:
     def __init__(self):
         self._tasks: dict[str, asyncio.Task] = {}
         self._factories: dict[str, Callable[[], Awaitable]] = {}  # 用于重启
+        self._restart_options: dict[str, tuple[bool, int, float, float]] = {}
 
     # —————— 创建 / 注册 ——————
 
@@ -61,6 +63,7 @@ class TaskManager:
                 pass
 
         self._factories[name] = coro_factory
+        self._restart_options[name] = (autorestart, max_retries, base_delay, max_delay)
 
         if autorestart:
             task = asyncio.create_task(
@@ -92,7 +95,7 @@ class TaskManager:
             except asyncio.CancelledError:
                 logger.info(f"[TaskManager] 任务 {name} 被取消")
                 return
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - supervisor isolates arbitrary worker failures
                 logger.exception(f"[TaskManager] 任务 {name} 异常退出 (第{attempt}/{max_retries}次): {e}")
 
             if attempt < max_retries:
@@ -153,6 +156,7 @@ class TaskManager:
 
         self._tasks.clear()
         self._factories.clear()
+        self._restart_options.clear()
         logger.info("[TaskManager] 所有任务已清理")
 
     # —————— 查询 ——————
@@ -181,13 +185,18 @@ class TaskManager:
         """Restart only an existing factory after its old task has stopped."""
         if name not in self._factories:
             raise ValueError("worker is not registered")
+        factory = self._factories[name]
+        autorestart, max_retries, base_delay, max_delay = self._restart_options[name]
         task = self._tasks.get(name)
         if task and not task.done():
             task.cancel()
             done, _ = await asyncio.wait({task}, timeout=5)
             if not done:
                 raise TimeoutError("old worker did not stop; replacement refused")
-        await self.create(name, self._factories[name])
+        await self.create(
+            name, factory, autorestart=autorestart, max_retries=max_retries,
+            base_delay=base_delay, max_delay=max_delay,
+        )
 
 
 # —————— 辅助函数 ——————
