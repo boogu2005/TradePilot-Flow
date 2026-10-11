@@ -716,10 +716,9 @@ async def create_order(
     }
     logger.info(f"[{exchange}] CREATE ORDER type={ordertype} symbol={ccxt_sym} side={side} posSide={pos_side} amount={amount} price={rate} clOrdId={cl_ord_id}")
 
-    raw = await _exponential_backoff_wrapper(
-        lambda: ex.create_order(ccxt_sym, ordertype, side, amount, rate, params),
-        exchange=exchange, label=f"create_order({symbol})",
-    )
+    from core.order_submission import submit_and_confirm
+    raw = await submit_and_confirm(ex, ccxt_sym, ordertype, side, amount, rate, params,
+                                   exchange=exchange, trigger=ordertype in ("stop_limit", "stop_market", "take_profit_limit"))
 
     # P1: create_order 已返回完整订单信息，无需再次 fetch_order
     # 参考：CCXT 官方文档 - create_order 返回标准化订单对象
@@ -740,19 +739,18 @@ async def create_stoploss_order(
     """
     止损单。支持 clientOrderId 实现幂等性。
 
-    OKX 通过 clOrdId 去重：相同 clOrdId 的重复请求返回已有订单而非创建新单。
+    网络结果未知时仅查询原客户端订单号，不依赖交易所永久去重。
     """
     ccxt_sym = _to_ccxt_symbol(symbol, exchange)
     ex = get_exchange(exchange)
     pos_side = "long" if side == "sell" else "short"
     params = {"tdMode": "isolated", "posSide": pos_side, "stopPrice": stop_price, "reduceOnly": True}
-    if client_order_id:
-        params["clOrdId"] = client_order_id
+    import uuid
+    params["clOrdId"] = client_order_id or f"bot{uuid.uuid4().hex[:18]}"
     logger.info(f"[{exchange}] create_stoploss: symbol={ccxt_sym} side={side} posSide={pos_side} amount={amount} stop={stop_price} clOrdId={client_order_id}")
-    order = await _exponential_backoff_wrapper(
-        lambda: ex.create_order(ccxt_sym, order_type, side, amount, stop_price, params),
-        exchange=exchange, label=f"create_stoploss({symbol})",
-    )
+    from core.order_submission import submit_and_confirm
+    order = await submit_and_confirm(ex, ccxt_sym, order_type, side, amount, stop_price, params,
+                                     exchange=exchange, trigger=True)
     logger.info(f"[{exchange}] 止损单完成 → {order.get('id')}")
     # 失效位置缓存（仓位可能变化）
     position_cache.invalidate(f"positions:{exchange}:*")
@@ -771,13 +769,12 @@ async def create_tp_order(
     ex = get_exchange(exchange)
     pos_side = "long" if side == "sell" else "short"
     params = {"tdMode": "isolated", "posSide": pos_side, "stopPrice": trigger_price, "price": trigger_price, "reduceOnly": True}
-    if client_order_id:
-        params["clOrdId"] = client_order_id
+    import uuid
+    params["clOrdId"] = client_order_id or f"bot{uuid.uuid4().hex[:18]}"
     logger.info(f"[{exchange}] create_tp: symbol={ccxt_sym} side={side} posSide={pos_side} amount={amount} trigger={trigger_price} clOrdId={client_order_id}")
-    order = await _exponential_backoff_wrapper(
-        lambda: ex.create_order(ccxt_sym, "take_profit_limit", side, amount, trigger_price, params),
-        exchange=exchange, label=f"create_tp({symbol})",
-    )
+    from core.order_submission import submit_and_confirm
+    order = await submit_and_confirm(ex, ccxt_sym, "take_profit_limit", side, amount, trigger_price, params,
+                                     exchange=exchange, trigger=True)
     logger.info(f"[{exchange}] 止盈单完成 → {order.get('id')}")
     # 失效位置缓存（单一共享键）
     position_cache.invalidate(f"positions:{exchange}:*")

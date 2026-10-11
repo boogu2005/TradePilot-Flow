@@ -1286,3 +1286,73 @@ class TeacherMonthRatioSnapshot(Base):
     snapshot_timestamp: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utc_now
     )
+
+
+# Diagnostic-agent records are deliberately separate from trading state.  A
+# checkpoint describes an investigation, never the current exchange state.
+class DiagnosticIncidentRecord(Base):
+    __tablename__ = "diagnostic_incidents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    correlation_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    object_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    object_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open", index=True)
+    occurrences: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    recovery_steps: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    evidence: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    checkpoint: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+
+class DiagnosticApprovalRecord(Base):
+    __tablename__ = "diagnostic_approvals"
+    __table_args__ = (
+        UniqueConstraint("incident_id", "plan_version", "plan_digest", "decision", name="uq_diag_approval"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    incident_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    plan_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    object_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    decision: Mapped[str] = mapped_column(String(24), nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(128), nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_now)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    modified_parameters: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class DiagnosticExecutionRecord(Base):
+    __tablename__ = "diagnostic_executions"
+
+    operation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    incident_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    parameters: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_now)
+    result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    verification: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+
+class DiagnosticLeaseRecord(Base):
+    __tablename__ = "diagnostic_leases"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class DiagnosticInvestigationRecord(Base):
+    __tablename__ = "diagnostic_investigations"
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    incident_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    checkpoint: Mapped[dict] = mapped_column(JSON, nullable=False)
+    archived_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utc_now)

@@ -30,6 +30,7 @@ from .protection_state_machine import (
     reset_repair_retry,
 )
 from .circuit_breaker import circuit_breaker
+from .protection_state_machine import MAX_REPAIR_RETRIES
 
 L = logger.bind(module="repair_worker")
 
@@ -154,8 +155,11 @@ async def _do_create_sl(trade: Trade, session: Session) -> None:
         reset_repair_retry(trade, session)
         L.success(f"[RepairWorker] Trade={trade.id} SL created: {result.algo_id}")
     else:
-        record_repair_attempt(trade, session)
+        retries = record_repair_attempt(trade, session)
         L.warning(f"[RepairWorker] Trade={trade.id} SL creation failed: {result.error}")
+        if retries >= MAX_REPAIR_RETRIES:
+            from diagnostics.service import report_protection_repair_exhausted
+            report_protection_repair_exhausted(trade, "create_sl", result.error or "unknown")
 
     session.commit()
 
@@ -170,8 +174,11 @@ async def _do_create_tp(trade: Trade, session: Session) -> None:
         reset_repair_retry(trade, session)
         L.success(f"[RepairWorker] Trade={trade.id} TP created: {result.algo_id}")
     else:
-        record_repair_attempt(trade, session)
+        retries = record_repair_attempt(trade, session)
         L.warning(f"[RepairWorker] Trade={trade.id} TP creation failed: {result.error}")
+        if retries >= MAX_REPAIR_RETRIES:
+            from diagnostics.service import report_protection_repair_exhausted
+            report_protection_repair_exhausted(trade, "create_tp", result.error or "unknown")
 
     session.commit()
 
@@ -183,7 +190,10 @@ async def _do_cancel_sl(trade: Trade, session: Session) -> None:
     if ok:
         reset_repair_retry(trade, session)
     else:
-        record_repair_attempt(trade, session)
+        retries = record_repair_attempt(trade, session)
+        if retries >= MAX_REPAIR_RETRIES:
+            from diagnostics.service import report_protection_repair_exhausted
+            report_protection_repair_exhausted(trade, "cancel_sl", "cancel returned false")
     session.commit()
 
 
@@ -194,5 +204,8 @@ async def _do_cancel_tp(trade: Trade, session: Session) -> None:
     if ok:
         reset_repair_retry(trade, session)
     else:
-        record_repair_attempt(trade, session)
+        retries = record_repair_attempt(trade, session)
+        if retries >= MAX_REPAIR_RETRIES:
+            from diagnostics.service import report_protection_repair_exhausted
+            report_protection_repair_exhausted(trade, "cancel_tp", "cancel returned false")
     session.commit()
