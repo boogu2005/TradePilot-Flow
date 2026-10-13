@@ -1,11 +1,12 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from database.models import Base
 from diagnostics.domain import AgentState, Evidence, IncidentInput, ToolCallRecord, ToolResult
-from diagnostics.repository import DiagnosticRepository
+from diagnostics.repository import DiagnosticRepository, InMemoryDiagnosticRepository
 
 
 def make_repo(tmp_path):
@@ -38,6 +39,30 @@ def test_duplicate_incident_merges_evidence_and_increments_occurrences(tmp_path)
     assert second.id == first.id
     assert second.occurrences == 2
     assert {item.source for item in second.evidence} == {"local", "exchange_rest"}
+
+
+@pytest.mark.parametrize("repository_kind", ["sqlite", "memory"])
+def test_delayed_duplicate_does_not_move_last_seen_backwards(tmp_path, repository_kind):
+    newest = datetime.now(timezone.utc)
+    delayed = newest - timedelta(minutes=5)
+    repo = make_repo(tmp_path) if repository_kind == "sqlite" else InMemoryDiagnosticRepository()
+
+    current = repo.report(IncidentInput(
+        correlation_key="order:delayed-replay",
+        event_type="order_result_unknown",
+        object_type="order",
+        object_id="delayed-replay",
+        occurred_at=newest,
+    ))
+    replayed = repo.report(IncidentInput(
+        correlation_key=current.correlation_key,
+        event_type=current.event_type,
+        object_type=current.object_type,
+        object_id=current.object_id,
+        occurred_at=delayed,
+    ))
+
+    assert replayed.last_seen_at == newest
 
 
 def test_checkpoint_round_trip_is_separate_from_business_state(tmp_path):

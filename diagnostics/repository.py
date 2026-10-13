@@ -134,7 +134,7 @@ class DiagnosticRepository:
                 )
                 session.add(row)
             else:
-                row.last_seen_at = value.occurred_at
+                row.last_seen_at = max(_aware(row.last_seen_at), _aware(value.occurred_at))
                 row.occurrences += 1
                 row.recovery_steps = list(dict.fromkeys([*(row.recovery_steps or []), *value.recovery_steps]))
                 known = {item["id"] for item in (row.evidence or [])}
@@ -289,7 +289,7 @@ class InMemoryDiagnosticRepository:
         if value.correlation_key in self.by_key:
             item = self.incidents[self.by_key[value.correlation_key]]
             item.occurrences += 1
-            item.last_seen_at = value.occurred_at
+            item.last_seen_at = max(_aware(item.last_seen_at), _aware(value.occurred_at))
             item.recovery_steps = list(dict.fromkeys([*item.recovery_steps, *value.recovery_steps]))
             item.evidence.extend(value.evidence)
             item.evidence = item.evidence[-100:]
