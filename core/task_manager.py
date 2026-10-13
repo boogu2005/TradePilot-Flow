@@ -131,7 +131,7 @@ class TaskManager:
         task = self._tasks.get(name)
         if task and not task.done():
             try:
-                await asyncio.wait_for(task, timeout=timeout)
+                await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
 

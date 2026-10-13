@@ -26,3 +26,30 @@ def test_manual_restart_preserves_autorestart_setting():
             await manager.cancel_all(timeout=1)
 
     asyncio.run(scenario())
+
+
+def test_wait_timeout_does_not_cancel_managed_task():
+    async def scenario():
+        manager = TaskManager()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def worker():
+            started.set()
+            await release.wait()
+
+        task = await manager.create("long-running", worker, autorestart=False)
+        await started.wait()
+        try:
+            await manager.wait("long-running", timeout=0.01)
+
+            assert manager.is_running("long-running")
+            assert not task.cancelled()
+
+            release.set()
+            await manager.wait("long-running", timeout=1)
+            assert task.done()
+        finally:
+            await manager.cancel_all(timeout=1)
+
+    asyncio.run(scenario())
